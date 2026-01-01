@@ -358,8 +358,8 @@ class ScraperService {
         });
       };
 
-      // Función para enriquecer negocios con teléfonos del panel expandido
-      const enrichBusinessesWithPhones = async () => {
+      // Función para enriquecer negocios visibles con teléfonos del panel expandido
+      const enrichVisibleBusinessesWithPhones = async () => {
         try {
           // Obtener todos los cards visibles y sus nombres
           const cardsInfo = await page.evaluate(() => {
@@ -367,6 +367,12 @@ class ScraperService {
             const info = [];
             
             cards.forEach((card, index) => {
+              // Verificar si el card está visible en el viewport
+              const rect = card.getBoundingClientRect();
+              const isVisible = rect.top >= 0 && rect.top <= window.innerHeight;
+              
+              if (!isVisible) return; // Saltar cards no visibles
+              
               const cardText = card.innerText || card.textContent || '';
               
               // Extraer nombre
@@ -396,12 +402,11 @@ class ScraperService {
             return info;
           });
 
-          console.log(`Procesando ${cardsInfo.length} cards para extraer teléfonos...`);
+          if (cardsInfo.length === 0) return;
 
-          // Procesar solo los primeros 20 cards visibles para no ser demasiado lento
-          const maxCardsToProcess = Math.min(cardsInfo.length, 20);
+          console.log(`Procesando ${cardsInfo.length} cards visibles para extraer teléfonos...`);
           
-          for (let i = 0; i < maxCardsToProcess; i++) {
+          for (let i = 0; i < cardsInfo.length; i++) {
             try {
               const cardInfo = cardsInfo[i];
               if (!cardInfo || !cardInfo.name) continue;
@@ -466,7 +471,7 @@ class ScraperService {
             }
           }
         } catch (error) {
-          console.log('Error en enrichBusinessesWithPhones:', error.message);
+          console.log('Error en enrichVisibleBusinessesWithPhones:', error.message);
         }
       };
 
@@ -474,9 +479,9 @@ class ScraperService {
       await extractBusinesses();
       console.log(`Negocios encontrados inicialmente: ${businesses.size}`);
 
-      // Enriquecer con teléfonos del panel expandido
-      await enrichBusinessesWithPhones();
-      console.log(`Negocios después de enriquecer con teléfonos: ${businesses.size}`);
+      // Enriquecer con teléfonos del panel expandido de los negocios iniciales
+      await enrichVisibleBusinessesWithPhones();
+      console.log(`Negocios después de enriquecer con teléfonos iniciales: ${businesses.size}`);
 
       // Hacer scroll hasta que no haya más resultados
       while (!noMoreResults && scrollAttempts < maxScrollAttempts) {
@@ -538,6 +543,10 @@ class ScraperService {
         await extractBusinesses();
         const countAfter = businesses.size;
 
+        // Enriquecer con teléfonos de los negocios visibles después de cada scroll
+        console.log(`Extrayendo teléfonos de negocios visibles después del scroll ${scrollAttempts}...`);
+        await enrichVisibleBusinessesWithPhones();
+
         // Verificar si hay nuevos resultados
         if (countAfter === countBefore) {
           stableCount++;
@@ -570,6 +579,10 @@ class ScraperService {
       // Una última extracción para asegurarnos de obtener todos
       await page.waitForTimeout(1000);
       await extractBusinesses();
+      
+      // Última pasada para extraer teléfonos de negocios que aún no los tienen
+      console.log('Realizando última pasada para extraer teléfonos restantes...');
+      await enrichVisibleBusinessesWithPhones();
       
       console.log(`Scraping completado. Total de negocios: ${businesses.size}`);
 
