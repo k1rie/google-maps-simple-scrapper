@@ -9,7 +9,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Middlewares
-app.use(cors());
+// Configurar CORS para permitir cualquier origen
+app.use(cors({
+  origin: '*', // Permitir cualquier origen
+  methods: ['GET', 'POST', 'OPTIONS'], // Métodos permitidos
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'], // Headers permitidos
+  credentials: false // No enviar cookies
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

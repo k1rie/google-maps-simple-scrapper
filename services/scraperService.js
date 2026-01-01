@@ -1,8 +1,8 @@
-const puppeteer = require('puppeteer');
+const { chromium } = require('playwright');
 
 /**
  * Servicio de scraping para Google Maps
- * Extrae números de teléfono de los resultados de búsqueda
+ * Extrae información completa de negocios de los resultados de búsqueda
  */
 class ScraperService {
   /**
@@ -16,154 +16,35 @@ class ScraperService {
     const businesses = new Map(); // Usar Map para evitar duplicados por nombre
     
     try {
-      // Obtener la ruta del ejecutable de Chrome/Chromium
-      // En producción (Linux/Docker): usar Chromium de Puppeteer automáticamente
-      // En desarrollo (macOS): intentar Chrome del sistema primero
-      let executablePath = null;
-      const path = require('path');
-      const fs = require('fs');
-      const os = require('os');
-      const platform = os.platform();
-      const isProduction = process.env.NODE_ENV === 'production' || platform === 'linux';
+      // Iniciar navegador con Playwright
+      // Playwright maneja automáticamente la instalación y ubicación de Chromium
+      console.log('✅ Iniciando navegador con Playwright (headless: true)');
       
-      // En producción (Linux), NO especificar executablePath - Puppeteer lo maneja automáticamente
-      if (!isProduction && platform === 'darwin') {
-        // Solo en macOS (desarrollo), buscar Chrome del sistema
-        try {
-          const systemChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-          if (fs.existsSync(systemChrome)) {
-            executablePath = systemChrome;
-            console.log(`✅ Usando Chrome del sistema en macOS: ${executablePath}`);
-          } else {
-            // Si no está Chrome del sistema, buscar Chromium de Puppeteer
-            const homeDir = os.homedir();
-            const chromePath = path.join(
-              homeDir, 
-              '.cache', 
-              'puppeteer', 
-              'chrome', 
-              'mac_arm-121.0.6167.85', 
-              'chrome-mac-arm64', 
-              'Google Chrome for Testing.app', 
-              'Contents', 
-              'MacOS', 
-              'Google Chrome for Testing'
-            );
-            
-            if (fs.existsSync(chromePath)) {
-              executablePath = chromePath;
-              console.log(`✅ Usando Chromium de Puppeteer: ${executablePath}`);
-            } else {
-              // Buscar cualquier versión disponible
-              const cachePath = path.join(homeDir, '.cache', 'puppeteer', 'chrome');
-              if (fs.existsSync(cachePath)) {
-                const findChrome = (dir) => {
-                  try {
-                    const files = fs.readdirSync(dir, { withFileTypes: true });
-                    for (const file of files) {
-                      const fullPath = path.join(dir, file.name);
-                      if (file.isDirectory()) {
-                        const found = findChrome(fullPath);
-                        if (found) return found;
-                      } else if (file.name === 'Google Chrome for Testing') {
-                        return fullPath;
-                      } else if (file.name.endsWith('.app')) {
-                        const chromePath = path.join(fullPath, 'Contents', 'MacOS', 'Google Chrome for Testing');
-                        if (fs.existsSync(chromePath)) return chromePath;
-                      }
-                    }
-                  } catch (e) {
-                    // Ignorar errores de lectura
-                  }
-                  return null;
-                };
-                executablePath = findChrome(cachePath);
-                if (executablePath) {
-                  console.log(`✅ Encontrado Chromium en: ${executablePath}`);
-                }
-              }
-            }
-          }
-        } catch (pathError) {
-          console.log('⚠️  No se pudo encontrar ruta de Chrome, usando la predeterminada de Puppeteer');
-        }
-      } else {
-        // En producción (Linux), Puppeteer usa automáticamente su Chromium
-        console.log('✅ Producción detectada: usando Chromium de Puppeteer automáticamente');
-      }
-
-      // Iniciar navegador con opciones optimizadas
-      // Configuración diferente para desarrollo (macOS) vs producción (Linux)
-      let launchOptions = {
-        headless: isProduction ? true : "new", // En producción usar modo headless true (más estable)
-        ignoreHTTPSErrors: true,
+      browser = await chromium.launch({
+        headless: true, // Modo headless activado
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
-          '--disable-gpu'
+          '--disable-gpu',
+          '--disable-software-rasterizer'
         ],
-        protocolTimeout: 60000,
-        timeout: 30000,
-        dumpio: false
-      };
-
-      // Agregar argumentos adicionales según el entorno
-      if (platform === 'darwin') {
-        // macOS: argumentos adicionales para estabilidad
-        launchOptions.args.push('--disable-software-rasterizer');
-      } else {
-        // Linux (producción): argumentos optimizados para servidor Docker
-        launchOptions.args.push('--disable-software-rasterizer', '--single-process');
-      }
-
-      // Si encontramos una ruta de ejecutable (solo en macOS desarrollo), usarla
-      if (executablePath && platform === 'darwin') {
-        launchOptions.executablePath = executablePath;
-      }
-      // En producción (Linux), NO especificar executablePath - Puppeteer lo encuentra automáticamente
-
-      try {
-        browser = await puppeteer.launch(launchOptions);
-      } catch (launchError) {
-        // Si falla, intentar con el nuevo modo headless
-        console.log('Intentando con nuevo modo headless...');
-        launchOptions.headless = "new";
-        launchOptions.args.push('--single-process', '--disable-software-rasterizer');
-        try {
-          browser = await puppeteer.launch(launchOptions);
-        } catch (secondError) {
-          // Último intento: modo headless false (con ventana)
-          console.log('Intentando con modo no-headless...');
-          launchOptions.headless = false;
-          browser = await puppeteer.launch(launchOptions);
-        }
-      }
-
-      // Manejar errores del navegador
-      browser.on('disconnected', () => {
-        console.log('Navegador desconectado');
+        timeout: 30000
       });
 
+      // Crear nueva página
       page = await browser.newPage();
       
-      // Manejar errores de la página
-      page.on('error', (error) => {
-        console.log('Error en la página (ignorado):', error.message);
-      });
-
-      page.on('pageerror', (error) => {
-        console.log('Error de página (ignorado):', error.message);
-      });
-      
       // Configurar viewport y user agent para evitar detección
-      await page.setViewport({ width: 1920, height: 1080 });
-      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+      await page.setViewportSize({ width: 1920, height: 1080 });
+      await page.setExtraHTTPHeaders({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      });
       
       // Navegar a Google Maps
       const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
       await page.goto(searchUrl, { 
-        waitUntil: 'networkidle2',
+        waitUntil: 'networkidle',
         timeout: 30000 
       });
 
@@ -186,15 +67,6 @@ class ScraperService {
 
       // Función mejorada para extraer información completa de negocios
       const extractBusinesses = async () => {
-        // Verificar que la página esté conectada
-        try {
-          if (page && typeof page.isClosed === 'function' && page.isClosed()) {
-            throw new Error('La página se cerró inesperadamente');
-          }
-        } catch (checkError) {
-          // Si hay error al verificar, continuar de todas formas
-        }
-
         const businessesData = await page.evaluate(() => {
           const businessesList = [];
           
@@ -395,16 +267,6 @@ class ScraperService {
       // Hacer scroll hasta que no haya más resultados
       while (!noMoreResults && scrollAttempts < maxScrollAttempts) {
         scrollAttempts++;
-        
-        // Verificar que la página esté conectada antes de hacer scroll
-        try {
-          if (page && typeof page.isClosed === 'function' && page.isClosed()) {
-            console.log('La página se cerró, finalizando scraping');
-            break;
-          }
-        } catch (checkError) {
-          // Continuar si hay error al verificar
-        }
 
         // Obtener el scroll actual antes de hacer scroll
         const scrollInfo = await page.evaluate(() => {
@@ -445,16 +307,6 @@ class ScraperService {
         // Esperar a que carguen nuevos resultados
         await page.waitForTimeout(2000);
 
-        // Verificar que la página esté conectada
-        try {
-          if (page && typeof page.isClosed === 'function' && page.isClosed()) {
-            console.log('La página se cerró, finalizando scraping');
-            break;
-          }
-        } catch (checkError) {
-          // Continuar si hay error al verificar
-        }
-
         // Verificar si apareció el mensaje "No hay más resultados"
         noMoreResults = await page.evaluate(() => {
           const bodyText = document.body.innerText || document.body.textContent || '';
@@ -484,16 +336,6 @@ class ScraperService {
           console.log(`Finalizando: noMoreResults=${noMoreResults}, stableCount=${stableCount}`);
           break;
         }
-        
-        // Verificar que la página esté conectada
-        try {
-          if (page && typeof page.isClosed === 'function' && page.isClosed()) {
-            console.log('La página se cerró, finalizando scraping');
-            break;
-          }
-        } catch (checkError) {
-          // Continuar si hay error al verificar
-        }
 
         // Verificar si realmente se hizo scroll
         const afterScroll = await page.evaluate(() => {
@@ -520,7 +362,7 @@ class ScraperService {
       return Array.from(businesses.values());
 
     } catch (error) {
-      // Filtrar errores de WebSocket/ECONNRESET que son comunes y no críticos
+      // Filtrar errores que son comunes y no críticos
       const errorMessage = error.message || error.toString();
       
       // Manejar error específico de lanzamiento del navegador
@@ -530,8 +372,8 @@ class ScraperService {
         console.error('Error al lanzar el navegador:', errorMessage);
         throw new Error(
           'No se pudo iniciar el navegador. ' +
-          'Asegúrate de que Puppeteer esté instalado correctamente. ' +
-          'Ejecuta: npm install puppeteer --force'
+          'Asegúrate de que Playwright esté instalado correctamente. ' +
+          'Ejecuta: npx playwright install chromium'
         );
       }
       
@@ -553,10 +395,7 @@ class ScraperService {
       // Cerrar página si existe
       if (page) {
         try {
-          const isClosed = typeof page.isClosed === 'function' ? page.isClosed() : false;
-          if (!isClosed) {
-            await page.close();
-          }
+          await page.close();
         } catch (error) {
           console.log('Error al cerrar página (ignorado):', error.message);
         }
@@ -565,8 +404,6 @@ class ScraperService {
       // Cerrar navegador si existe
       if (browser) {
         try {
-          const pages = await browser.pages();
-          await Promise.all(pages.map(p => p.close().catch(() => {})));
           await browser.close();
         } catch (error) {
           console.log('Error al cerrar navegador (ignorado):', error.message);
@@ -578,4 +415,3 @@ class ScraperService {
 
 // Exportar instancia del servicio
 module.exports = new ScraperService();
-

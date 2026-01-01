@@ -1,6 +1,6 @@
 # Scraper de Google Maps - API
 
-API backend con Express y Puppeteer para extraer información completa de negocios (nombre, teléfono, dirección, calificación, etc.) de los resultados de búsqueda en Google Maps. Incluye opción para descargar los resultados en formato CSV.
+API backend con Express y Playwright para extraer información completa de negocios (nombre, teléfono, dirección, calificación, etc.) de los resultados de búsqueda en Google Maps. Incluye opción para descargar los resultados en formato CSV.
 
 ## 🚀 Instalación
 
@@ -11,7 +11,7 @@ npm install
 ## 📦 Dependencias
 
 - **express**: Framework web para Node.js
-- **puppeteer**: Librería para automatizar navegador (Chrome/Chromium)
+- **playwright**: Librería para automatizar navegador (Chromium) con modo headless
 - **nodemon**: Herramienta para desarrollo con auto-reload
 - **cors**: Middleware para habilitar CORS
 
@@ -162,7 +162,7 @@ scrapper-maps/
 ## ⚙️ Características
 
 - ✅ Arquitectura MVC con separación de responsabilidades
-- ✅ Scraping automático con Puppeteer (navegador headless)
+- ✅ Scraping automático con Playwright (navegador headless: true)
 - ✅ Scroll automático hasta encontrar todos los resultados
 - ✅ Detección del mensaje "No hay más resultados"
 - ✅ Extracción completa de información de negocios:
@@ -187,7 +187,7 @@ PORT=4000 npm start
 
 ## 🔍 Verificación de Instalación
 
-Para verificar que Puppeteer está instalado correctamente:
+Para verificar que Playwright está instalado correctamente:
 
 ```bash
 npm run check
@@ -202,7 +202,7 @@ Este comando verifica que el navegador pueda lanzarse correctamente.
 **Este es un problema conocido en macOS**, especialmente en versiones recientes. Los warnings sobre "unexpected crash info version 7" son normales y no críticos.
 
 **✅ Solución automática:**
-El código ahora detecta automáticamente si Chrome está instalado en macOS y lo usa. Si tienes Chrome instalado, debería funcionar sin configuración adicional.
+Playwright maneja automáticamente la instalación de Chromium. Solo necesitas ejecutar `npx playwright install chromium` después de instalar las dependencias.
 
 **Si aún tienes problemas:**
 
@@ -220,25 +220,24 @@ El código ahora detecta automáticamente si Chrome está instalado en macOS y l
 **¡Buenas noticias!** En producción **NO tendrás este problema** porque:
 
 - ✅ Railway usa **Linux**, no macOS
-- ✅ Puppeteer funciona **perfectamente** en Linux
+- ✅ Playwright funciona **perfectamente** en Linux
 - ✅ No hay problemas de permisos como en macOS
-- ✅ El código detecta automáticamente el entorno y usa la configuración correcta
-- ✅ Chromium se descarga automáticamente durante el build
+- ✅ El código usa modo headless: true automáticamente
+- ✅ Chromium se instala automáticamente durante el build de Docker
 
 **No necesitas hacer nada especial para producción.** El código ya está configurado para:
-- **Desarrollo (macOS)**: Usa Chrome del sistema si está disponible
-- **Producción (Linux)**: Usa Chromium de Puppeteer automáticamente
+- **Desarrollo**: Usa Playwright con Chromium (headless: true)
+- **Producción (Linux/Docker)**: Usa Chromium de Playwright automáticamente
 
 **Otras soluciones:**
 
-1. **Verificar que Chromium se descargó:**
+1. **Verificar que Chromium se instaló:**
    ```bash
-   ls -la node_modules/puppeteer/.local-chromium/
+   npx playwright install chromium
    ```
-   Si está vacío, forzar descarga:
+   Si hay problemas, instalar dependencias del sistema:
    ```bash
-   rm -rf node_modules/puppeteer/.local-chromium
-   PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false npm install puppeteer --force
+   npx playwright install-deps chromium
    ```
 
 2. **En macOS, verificar herramientas de desarrollo:**
@@ -259,22 +258,11 @@ El código ahora detecta automáticamente si Chrome está instalado en macOS y l
    ```
    Asegúrate de que ambos coincidan.
 
-4. **Usar Chrome instalado en el sistema (alternativa):**
-   Si tienes Chrome instalado, puedes configurar Puppeteer para usarlo:
-   ```bash
-   # En macOS, Chrome generalmente está en:
-   # /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
-   ```
-   Luego modifica `services/scraperService.js` para usar:
-   ```javascript
-   executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-   ```
-
-5. **Reinstalar completamente:**
+4. **Reinstalar completamente:**
    ```bash
    rm -rf node_modules package-lock.json
    npm install
-   npm install puppeteer --force
+   npx playwright install chromium
    ```
 
 6. **Verificar instalación:**
@@ -292,8 +280,9 @@ Estos errores son comunes y el scraper los maneja automáticamente. Si se extrae
 - Se detiene cuando aparece el mensaje "No hay más resultados"
 - Los números de teléfono se extraen de múltiples fuentes en el DOM
 - El proceso puede tardar varios segundos dependiendo de la cantidad de resultados
-- El scraper usa el nuevo modo headless de Chrome para mejor rendimiento
+- El scraper usa Playwright con modo headless: true para mejor rendimiento
 
+# google-maps-simple-scrapper
 # google-maps-simple-scrapper
 # google-maps-simple-scrapper
 # google-maps-simple-scrapper
