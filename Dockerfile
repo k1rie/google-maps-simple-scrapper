@@ -2,6 +2,7 @@
 FROM node:18-slim
 
 # Instalar dependencias del sistema necesarias para Playwright/Chromium
+# Incluir herramientas de compilación por si Playwright las necesita
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -40,6 +41,9 @@ RUN apt-get update && apt-get install -y \
     libxtst6 \
     lsb-release \
     xdg-utils \
+    python3 \
+    make \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Crear directorio de trabajo
@@ -49,11 +53,12 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instalar dependencias de npm
-RUN npm ci --only=production
+# npm install es más tolerante que npm ci si hay problemas con package-lock.json
+RUN npm install --production
 
-# Instalar navegadores de Playwright (Chromium) como root
+# Instalar navegadores de Playwright (Chromium)
+# Esto debe hacerse después de instalar las dependencias npm
 RUN npx playwright install chromium
-RUN npx playwright install-deps chromium
 
 # Crear usuario no-root para seguridad
 RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
