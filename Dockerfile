@@ -56,23 +56,29 @@ COPY package*.json ./
 # npm install es más tolerante que npm ci si hay problemas con package-lock.json
 RUN npm install --production
 
-# Instalar navegadores de Playwright (Chromium)
-# Esto debe hacerse después de instalar las dependencias npm
+# Crear directorio compartido para navegadores de Playwright
+# Esto permite que tanto root como el usuario no-root puedan acceder
+RUN mkdir -p /app/.cache/ms-playwright
+
+# Configurar variable de entorno ANTES de instalar navegadores
+# Esto hace que Playwright instale en el directorio compartido
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
+
+# Instalar navegadores de Playwright (Chromium) como root
+# Se instalarán en /app/.cache/ms-playwright gracias a la variable de entorno
 RUN npx playwright install chromium
 
 # Crear usuario no-root para seguridad
 RUN groupadd -r pptruser && useradd -r -g pptruser -G audio,video pptruser \
-    && mkdir -p /home/pptruser/Downloads \
-    && mkdir -p /home/pptruser/.cache/ms-playwright
+    && mkdir -p /home/pptruser/Downloads
 
 # Copiar el resto de los archivos de la aplicación
 COPY . .
 
 # Ajustar permisos de todos los archivos (incluyendo navegadores de Playwright)
-# Playwright instala navegadores en ~/.cache/ms-playwright por defecto
+# Los navegadores están en /app/.cache/ms-playwright y deben ser accesibles por pptruser
 RUN chown -R pptruser:pptruser /home/pptruser \
-    && chown -R pptruser:pptruser /app \
-    && chown -R pptruser:pptruser /root/.cache/ms-playwright 2>/dev/null || true
+    && chown -R pptruser:pptruser /app
 
 # Cambiar a usuario no-root
 USER pptruser
@@ -80,8 +86,8 @@ USER pptruser
 # Exponer el puerto
 EXPOSE 3000
 
-# Variables de entorno para Playwright
-ENV PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+# Variables de entorno para Playwright (ya configurada arriba, pero la redefinimos)
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/.cache/ms-playwright
 ENV NODE_ENV=production
 
 # Comando para iniciar la aplicación
