@@ -17,16 +17,19 @@ class ScraperService {
     
     try {
       // Obtener la ruta del ejecutable de Chrome/Chromium
-      // Prioridad: Chrome del sistema (macOS) > Chromium de Puppeteer > Predeterminado
+      // En producción (Linux/Docker): usar Chromium de Puppeteer automáticamente
+      // En desarrollo (macOS): intentar Chrome del sistema primero
       let executablePath = null;
       const path = require('path');
       const fs = require('fs');
       const os = require('os');
       const platform = os.platform();
+      const isProduction = process.env.NODE_ENV === 'production' || platform === 'linux';
       
-      try {
-        // En macOS, intentar usar Chrome del sistema primero (más confiable)
-        if (platform === 'darwin') {
+      // En producción (Linux), NO especificar executablePath - Puppeteer lo maneja automáticamente
+      if (!isProduction && platform === 'darwin') {
+        // Solo en macOS (desarrollo), buscar Chrome del sistema
+        try {
           const systemChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
           if (fs.existsSync(systemChrome)) {
             executablePath = systemChrome;
@@ -81,24 +84,24 @@ class ScraperService {
               }
             }
           }
+        } catch (pathError) {
+          console.log('⚠️  No se pudo encontrar ruta de Chrome, usando la predeterminada de Puppeteer');
         }
-        // En Linux (producción), Puppeteer maneja automáticamente la ruta
-        // No necesitamos especificar executablePath en producción
-      } catch (pathError) {
-        console.log('⚠️  No se pudo encontrar ruta de Chrome, usando la predeterminada de Puppeteer');
+      } else {
+        // En producción (Linux), Puppeteer usa automáticamente su Chromium
+        console.log('✅ Producción detectada: usando Chromium de Puppeteer automáticamente');
       }
 
       // Iniciar navegador con opciones optimizadas
       // Configuración diferente para desarrollo (macOS) vs producción (Linux)
-      const isProduction = process.env.NODE_ENV === 'production' || platform === 'linux';
-      
       let launchOptions = {
-        headless: isProduction ? true : "new", // En producción usar modo antiguo (más estable)
+        headless: isProduction ? true : "new", // En producción usar modo headless true (más estable)
         ignoreHTTPSErrors: true,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage'
+          '--disable-dev-shm-usage',
+          '--disable-gpu'
         ],
         protocolTimeout: 60000,
         timeout: 30000,
@@ -108,17 +111,17 @@ class ScraperService {
       // Agregar argumentos adicionales según el entorno
       if (platform === 'darwin') {
         // macOS: argumentos adicionales para estabilidad
-        launchOptions.args.push('--disable-gpu', '--disable-software-rasterizer');
+        launchOptions.args.push('--disable-software-rasterizer');
       } else {
-        // Linux (producción): argumentos optimizados para servidor
-        launchOptions.args.push('--disable-dev-shm-usage', '--disable-gpu');
+        // Linux (producción): argumentos optimizados para servidor Docker
+        launchOptions.args.push('--disable-software-rasterizer', '--single-process');
       }
 
-      // Si encontramos una ruta de ejecutable (solo en macOS), usarla
+      // Si encontramos una ruta de ejecutable (solo en macOS desarrollo), usarla
       if (executablePath && platform === 'darwin') {
         launchOptions.executablePath = executablePath;
       }
-      // En producción (Linux), Puppeteer usa automáticamente su Chromium
+      // En producción (Linux), NO especificar executablePath - Puppeteer lo encuentra automáticamente
 
       try {
         browser = await puppeteer.launch(launchOptions);
