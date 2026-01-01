@@ -1,0 +1,578 @@
+const puppeteer = require('puppeteer');
+
+/**
+ * Servicio de scraping para Google Maps
+ * Extrae números de teléfono de los resultados de búsqueda
+ */
+class ScraperService {
+  /**
+   * Scraper de Google Maps que extrae información completa de los negocios
+   * @param {string} searchQuery - Texto a buscar en Google Maps
+   * @returns {Promise<Array>} - Array de objetos con información de negocios
+   */
+  async scrapeGoogleMaps(searchQuery) {
+    let browser = null;
+    let page = null;
+    const businesses = new Map(); // Usar Map para evitar duplicados por nombre
+    
+    try {
+      // Obtener la ruta del ejecutable de Chrome/Chromium
+      // Prioridad: Chrome del sistema (macOS) > Chromium de Puppeteer > Predeterminado
+      let executablePath = null;
+      const path = require('path');
+      const fs = require('fs');
+      const os = require('os');
+      const platform = os.platform();
+      
+      try {
+        // En macOS, intentar usar Chrome del sistema primero (más confiable)
+        if (platform === 'darwin') {
+          const systemChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+          if (fs.existsSync(systemChrome)) {
+            executablePath = systemChrome;
+            console.log(`✅ Usando Chrome del sistema en macOS: ${executablePath}`);
+          } else {
+            // Si no está Chrome del sistema, buscar Chromium de Puppeteer
+            const homeDir = os.homedir();
+            const chromePath = path.join(
+              homeDir, 
+              '.cache', 
+              'puppeteer', 
+              'chrome', 
+              'mac_arm-121.0.6167.85', 
+              'chrome-mac-arm64', 
+              'Google Chrome for Testing.app', 
+              'Contents', 
+              'MacOS', 
+              'Google Chrome for Testing'
+            );
+            
+            if (fs.existsSync(chromePath)) {
+              executablePath = chromePath;
+              console.log(`✅ Usando Chromium de Puppeteer: ${executablePath}`);
+            } else {
+              // Buscar cualquier versión disponible
+              const cachePath = path.join(homeDir, '.cache', 'puppeteer', 'chrome');
+              if (fs.existsSync(cachePath)) {
+                const findChrome = (dir) => {
+                  try {
+                    const files = fs.readdirSync(dir, { withFileTypes: true });
+                    for (const file of files) {
+                      const fullPath = path.join(dir, file.name);
+                      if (file.isDirectory()) {
+                        const found = findChrome(fullPath);
+                        if (found) return found;
+                      } else if (file.name === 'Google Chrome for Testing') {
+                        return fullPath;
+                      } else if (file.name.endsWith('.app')) {
+                        const chromePath = path.join(fullPath, 'Contents', 'MacOS', 'Google Chrome for Testing');
+                        if (fs.existsSync(chromePath)) return chromePath;
+                      }
+                    }
+                  } catch (e) {
+                    // Ignorar errores de lectura
+                  }
+                  return null;
+                };
+                executablePath = findChrome(cachePath);
+                if (executablePath) {
+                  console.log(`✅ Encontrado Chromium en: ${executablePath}`);
+                }
+              }
+            }
+          }
+        }
+        // En Linux (producción), Puppeteer maneja automáticamente la ruta
+        // No necesitamos especificar executablePath en producción
+      } catch (pathError) {
+        console.log('⚠️  No se pudo encontrar ruta de Chrome, usando la predeterminada de Puppeteer');
+      }
+
+      // Iniciar navegador con opciones optimizadas
+      // Configuración diferente para desarrollo (macOS) vs producción (Linux)
+      const isProduction = process.env.NODE_ENV === 'production' || platform === 'linux';
+      
+      let launchOptions = {
+        headless: isProduction ? true : "new", // En producción usar modo antiguo (más estable)
+        ignoreHTTPSErrors: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage'
+        ],
+        protocolTimeout: 60000,
+        timeout: 30000,
+        dumpio: false
+      };
+
+      // Agregar argumentos adicionales según el entorno
+      if (platform === 'darwin') {
+        // macOS: argumentos adicionales para estabilidad
+        launchOptions.args.push('--disable-gpu', '--disable-software-rasterizer');
+      } else {
+        // Linux (producción): argumentos optimizados para servidor
+        launchOptions.args.push('--disable-dev-shm-usage', '--disable-gpu');
+      }
+
+      // Si encontramos una ruta de ejecutable (solo en macOS), usarla
+      if (executablePath && platform === 'darwin') {
+        launchOptions.executablePath = executablePath;
+      }
+      // En producción (Linux), Puppeteer usa automáticamente su Chromium
+
+      try {
+        browser = await puppeteer.launch(launchOptions);
+      } catch (launchError) {
+        // Si falla, intentar con el nuevo modo headless
+        console.log('Intentando con nuevo modo headless...');
+        launchOptions.headless = "new";
+        launchOptions.args.push('--single-process', '--disable-software-rasterizer');
+        try {
+          browser = await puppeteer.launch(launchOptions);
+        } catch (secondError) {
+          // Último intento: modo headless false (con ventana)
+          console.log('Intentando con modo no-headless...');
+          launchOptions.headless = false;
+          browser = await puppeteer.launch(launchOptions);
+        }
+      }
+
+      // Manejar errores del navegador
+      browser.on('disconnected', () => {
+        console.log('Navegador desconectado');
+      });
+
+      page = await browser.newPage();
+      
+      // Manejar errores de la página
+      page.on('error', (error) => {
+        console.log('Error en la página (ignorado):', error.message);
+      });
+
+      page.on('pageerror', (error) => {
+        console.log('Error de página (ignorado):', error.message);
+      });
+      
+      // Configurar viewport y user agent para evitar detección
+      await page.setViewport({ width: 1920, height: 1080 });
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+      
+      // Navegar a Google Maps
+      const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
+      await page.goto(searchUrl, { 
+        waitUntil: 'networkidle2',
+        timeout: 30000 
+      });
+
+      // Esperar a que carguen los resultados
+      await page.waitForSelector('[role="main"]', { timeout: 15000 });
+      
+      // Esperar a que aparezcan los resultados de búsqueda
+      try {
+        await page.waitForSelector('div[role="article"]', { timeout: 10000 });
+      } catch (e) {
+        console.log('Esperando resultados...');
+      }
+      
+      await page.waitForTimeout(3000);
+      let previousResultsCount = 0;
+      let noMoreResults = false;
+      let scrollAttempts = 0;
+      const maxScrollAttempts = 150; // Límite de seguridad
+      let stableCount = 0; // Contador para detectar cuando no hay más cambios
+
+      // Función mejorada para extraer información completa de negocios
+      const extractBusinesses = async () => {
+        // Verificar que la página esté conectada
+        try {
+          if (page && typeof page.isClosed === 'function' && page.isClosed()) {
+            throw new Error('La página se cerró inesperadamente');
+          }
+        } catch (checkError) {
+          // Si hay error al verificar, continuar de todas formas
+        }
+
+        const businessesData = await page.evaluate(() => {
+          const businessesList = [];
+          
+          // Patrón para números de teléfono
+          const phoneRegex = /(\+?\d{1,4}[\s\-\.]?)?\(?\d{2,4}\)?[\s\-\.]?\d{2,4}[\s\-\.]?\d{2,4}[\s\-\.]?\d{0,4}/g;
+          
+          // Buscar todos los resultados de búsqueda
+          const resultCards = document.querySelectorAll('div[role="article"]');
+          
+          resultCards.forEach((card, index) => {
+            try {
+              // Obtener el texto del card una sola vez para reutilizar
+              const cardText = card.innerText || card.textContent || '';
+              
+              // Extraer nombre del negocio - múltiples estrategias
+              let businessName = '';
+              
+              // Estrategia 1: Buscar en elementos con aria-label que contengan el nombre
+              const nameLink = card.querySelector('a[data-value="name"]') || 
+                               card.querySelector('a[aria-label]') ||
+                               card.querySelector('[data-value="name"]');
+              
+              if (nameLink) {
+                businessName = nameLink.getAttribute('aria-label') || 
+                             nameLink.getAttribute('data-value') ||
+                             nameLink.textContent?.trim() ||
+                             nameLink.innerText?.trim() || '';
+              }
+              
+              // Estrategia 2: Buscar en el primer elemento con texto destacado
+              if (!businessName) {
+                const titleElement = card.querySelector('div[role="button"]') ||
+                                   card.querySelector('div[jsaction*="click"]') ||
+                                   card.querySelector('div.fontHeadlineSmall');
+                if (titleElement) {
+                  businessName = titleElement.textContent?.trim() || 
+                               titleElement.innerText?.trim() || '';
+                }
+              }
+              
+              // Estrategia 3: Buscar en el texto del card (primera línea significativa)
+              if (!businessName) {
+                const lines = cardText.split('\n').filter(line => line.trim() && line.length > 2);
+                // La primera línea suele ser el nombre, pero filtrar si parece ser un número de teléfono
+                for (let line of lines) {
+                  if (!line.match(/^[\d\s\+\-\(\)]+$/) && line.length > 3) {
+                    businessName = line.trim();
+                    break;
+                  }
+                }
+              }
+              
+              // Limpiar el nombre (remover caracteres extraños al inicio)
+              if (businessName) {
+                businessName = businessName.replace(/^[•\-\s]+/, '').trim();
+              }
+              
+              if (!businessName || businessName.length < 2) {
+                businessName = 'Sin nombre';
+              }
+              
+              // Extraer teléfono
+              let phone = '';
+              const phoneMatches = cardText.match(phoneRegex);
+              if (phoneMatches && phoneMatches.length > 0) {
+                // Filtrar números válidos
+                phoneMatches.forEach(match => {
+                  const cleaned = match.replace(/[\s\-\.\(\)]/g, '');
+                  if (cleaned.length >= 8 && cleaned.length <= 15 && !cleaned.match(/^\d{4,5}$/)) {
+                    if (!cleaned.match(/^(19|20)\d{2}$/) && cleaned.length >= 8) {
+                      if (!phone) phone = match.trim();
+                    }
+                  }
+                });
+              }
+              
+              // Buscar en links tel:
+              if (!phone) {
+                const telLink = card.querySelector('a[href^="tel:"]');
+                if (telLink) {
+                  const href = telLink.getAttribute('href');
+                  if (href) {
+                    phone = href.replace('tel:', '').trim();
+                  }
+                }
+              }
+              
+              // Extraer dirección
+              let address = '';
+              const addressElements = card.querySelectorAll('[data-value*="address"], [aria-label*="dirección"], [aria-label*="address"]');
+              addressElements.forEach(el => {
+                const text = el.getAttribute('aria-label') || el.getAttribute('data-value') || el.textContent || '';
+                if (text && (text.includes('dirección') || text.includes('address') || text.includes(',') || text.match(/\d/))) {
+                  address = text.replace(/dirección|address/gi, '').trim();
+                }
+              });
+              
+              // Si no encontramos dirección, buscar en el texto del card
+              if (!address) {
+                const lines = cardText.split('\n').filter(line => line.trim());
+                // Buscar líneas que parezcan direcciones (contienen números o comas)
+                for (let line of lines) {
+                  if ((line.includes(',') || line.match(/\d/)) && line.length > 10) {
+                    address = line.trim();
+                    break;
+                  }
+                }
+              }
+              
+              // Extraer calificación
+              let rating = '';
+              const ratingElement = card.querySelector('[aria-label*="estrellas"], [aria-label*="stars"], [role="img"][aria-label*="."]');
+              if (ratingElement) {
+                const ratingText = ratingElement.getAttribute('aria-label') || '';
+                const ratingMatch = ratingText.match(/(\d+\.?\d*)/);
+                if (ratingMatch) {
+                  rating = ratingMatch[1];
+                }
+              }
+              
+              // Extraer número de reseñas
+              let reviews = '';
+              const reviewsText = card.innerText || card.textContent || '';
+              const reviewsMatch = reviewsText.match(/(\d+)\s*(reseñas|reviews|opiniones)/i);
+              if (reviewsMatch) {
+                reviews = reviewsMatch[1];
+              }
+              
+              // Extraer categoría/tipo de negocio
+              let category = '';
+              const lines = cardText.split('\n').filter(line => line.trim());
+              
+              // La categoría suele estar después del nombre, antes del teléfono/dirección
+              let foundName = false;
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                // Si encontramos el nombre, la siguiente línea útil suele ser la categoría
+                if (foundName && line && line.length < 50 && !line.match(phoneRegex) && 
+                    !line.includes('dirección') && !line.includes('address') &&
+                    !line.match(/^\d+\.?\d*\s*(estrellas|stars)/i) && !line.match(/\d+\s*(reseñas|reviews)/i)) {
+                  category = line;
+                  break;
+                }
+                // Detectar si esta línea es el nombre (no es teléfono, no es dirección)
+                if (line && !line.match(phoneRegex) && !line.includes(',') && 
+                    line.length > 3 && line.length < 100 && !line.match(/^\d+\.?\d*$/)) {
+                  foundName = true;
+                }
+              }
+              
+              // Solo agregar si tenemos al menos nombre o teléfono
+              if (businessName && businessName !== 'Sin nombre') {
+                businessesList.push({
+                  nombre: businessName.trim(),
+                  telefono: phone || 'No disponible',
+                  direccion: address || 'No disponible',
+                  calificacion: rating || 'No disponible',
+                  reseñas: reviews || 'No disponible',
+                  categoria: category || 'No disponible'
+                });
+              }
+            } catch (error) {
+              // Continuar con el siguiente card si hay error
+              console.log('Error procesando card:', error);
+            }
+          });
+          
+          return businessesList;
+        });
+        
+        // Agregar negocios al Map (evitar duplicados por nombre)
+        businessesData.forEach(business => {
+          if (business.nombre && business.nombre !== 'Sin nombre') {
+            // Si ya existe, actualizar con información más completa
+            if (businesses.has(business.nombre)) {
+              const existing = businesses.get(business.nombre);
+              // Actualizar solo si la nueva información es más completa
+              if (business.telefono !== 'No disponible' && existing.telefono === 'No disponible') {
+                existing.telefono = business.telefono;
+              }
+              if (business.direccion !== 'No disponible' && existing.direccion === 'No disponible') {
+                existing.direccion = business.direccion;
+              }
+              if (business.calificacion !== 'No disponible' && existing.calificacion === 'No disponible') {
+                existing.calificacion = business.calificacion;
+              }
+            } else {
+              businesses.set(business.nombre, business);
+            }
+          }
+        });
+      };
+
+      // Extraer información inicial
+      await extractBusinesses();
+      console.log(`Negocios encontrados inicialmente: ${businesses.size}`);
+
+      // Hacer scroll hasta que no haya más resultados
+      while (!noMoreResults && scrollAttempts < maxScrollAttempts) {
+        scrollAttempts++;
+        
+        // Verificar que la página esté conectada antes de hacer scroll
+        try {
+          if (page && typeof page.isClosed === 'function' && page.isClosed()) {
+            console.log('La página se cerró, finalizando scraping');
+            break;
+          }
+        } catch (checkError) {
+          // Continuar si hay error al verificar
+        }
+
+        // Obtener el scroll actual antes de hacer scroll
+        const scrollInfo = await page.evaluate(() => {
+          // Buscar el panel scrollable de resultados (sidebar izquierdo)
+          const mainPanel = document.querySelector('[role="main"]');
+          const resultsPanel = document.querySelector('div[role="feed"]') || 
+                              document.querySelector('[aria-label*="Resultados"]') ||
+                              document.querySelector('[aria-label*="Results"]') ||
+                              mainPanel;
+          
+          if (resultsPanel) {
+            const beforeScroll = resultsPanel.scrollTop;
+            const scrollHeight = resultsPanel.scrollHeight;
+            const clientHeight = resultsPanel.clientHeight;
+            
+            // Hacer scroll hacia abajo
+            resultsPanel.scrollTop = scrollHeight;
+            
+            return {
+              beforeScroll,
+              scrollHeight,
+              clientHeight,
+              canScroll: scrollHeight > clientHeight
+            };
+          }
+          
+          // Fallback: scroll en la ventana
+          const beforeScroll = window.pageYOffset || document.documentElement.scrollTop;
+          window.scrollTo(0, document.body.scrollHeight);
+          return {
+            beforeScroll,
+            scrollHeight: document.body.scrollHeight,
+            clientHeight: window.innerHeight,
+            canScroll: true
+          };
+        });
+
+        // Esperar a que carguen nuevos resultados
+        await page.waitForTimeout(2000);
+
+        // Verificar que la página esté conectada
+        try {
+          if (page && typeof page.isClosed === 'function' && page.isClosed()) {
+            console.log('La página se cerró, finalizando scraping');
+            break;
+          }
+        } catch (checkError) {
+          // Continuar si hay error al verificar
+        }
+
+        // Verificar si apareció el mensaje "No hay más resultados"
+        noMoreResults = await page.evaluate(() => {
+          const bodyText = document.body.innerText || document.body.textContent || '';
+          const lowerText = bodyText.toLowerCase();
+          
+          return lowerText.includes('no hay más resultados') || 
+                 lowerText.includes('no more results') ||
+                 lowerText.includes('no se encontraron más resultados') ||
+                 lowerText.includes('no more places') ||
+                 lowerText.includes('end of results');
+        });
+
+        // Extraer información después de cada scroll
+        const countBefore = businesses.size;
+        await extractBusinesses();
+        const countAfter = businesses.size;
+
+        // Verificar si hay nuevos resultados
+        if (countAfter === countBefore) {
+          stableCount++;
+        } else {
+          stableCount = 0; // Reset si encontramos nuevos negocios
+        }
+
+        // Si no hay cambios después de varios intentos y encontramos el mensaje, terminar
+        if (noMoreResults || (stableCount >= 5 && scrollAttempts > 10)) {
+          console.log(`Finalizando: noMoreResults=${noMoreResults}, stableCount=${stableCount}`);
+          break;
+        }
+        
+        // Verificar que la página esté conectada
+        try {
+          if (page && typeof page.isClosed === 'function' && page.isClosed()) {
+            console.log('La página se cerró, finalizando scraping');
+            break;
+          }
+        } catch (checkError) {
+          // Continuar si hay error al verificar
+        }
+
+        // Verificar si realmente se hizo scroll
+        const afterScroll = await page.evaluate(() => {
+          const mainPanel = document.querySelector('[role="main"]');
+          const resultsPanel = document.querySelector('div[role="feed"]') || mainPanel;
+          return resultsPanel ? resultsPanel.scrollTop : (window.pageYOffset || 0);
+        });
+
+        if (scrollInfo.beforeScroll === afterScroll && scrollAttempts > 5) {
+          // No se puede hacer más scroll
+          console.log('No se puede hacer más scroll');
+          break;
+        }
+        
+        console.log(`Scroll ${scrollAttempts}: ${businesses.size} negocios encontrados`);
+      }
+
+      // Una última extracción para asegurarnos de obtener todos
+      await page.waitForTimeout(1000);
+      await extractBusinesses();
+      
+      console.log(`Scraping completado. Total de negocios: ${businesses.size}`);
+
+      return Array.from(businesses.values());
+
+    } catch (error) {
+      // Filtrar errores de WebSocket/ECONNRESET que son comunes y no críticos
+      const errorMessage = error.message || error.toString();
+      
+      // Manejar error específico de lanzamiento del navegador
+      if (errorMessage.includes('Failed to launch') || 
+          errorMessage.includes('Browser process') ||
+          errorMessage.includes('Executable doesn\'t exist')) {
+        console.error('Error al lanzar el navegador:', errorMessage);
+        throw new Error(
+          'No se pudo iniciar el navegador. ' +
+          'Asegúrate de que Puppeteer esté instalado correctamente. ' +
+          'Ejecuta: npm install puppeteer --force'
+        );
+      }
+      
+      if (errorMessage.includes('ECONNRESET') || 
+          errorMessage.includes('Target closed') ||
+          errorMessage.includes('Session closed') ||
+          errorMessage.includes('Protocol error')) {
+        console.log('Error de conexión del navegador (puede ser no crítico):', errorMessage);
+        // Si tenemos negocios extraídos, retornarlos
+        if (businesses && businesses.size > 0) {
+          console.log(`Retornando ${businesses.size} negocios encontrados antes del error`);
+          return Array.from(businesses.values());
+        }
+      }
+      
+      console.error('Error en el scraper:', errorMessage);
+      throw new Error(`Error al realizar el scraping: ${errorMessage}`);
+    } finally {
+      // Cerrar página si existe
+      if (page) {
+        try {
+          const isClosed = typeof page.isClosed === 'function' ? page.isClosed() : false;
+          if (!isClosed) {
+            await page.close();
+          }
+        } catch (error) {
+          console.log('Error al cerrar página (ignorado):', error.message);
+        }
+      }
+      
+      // Cerrar navegador si existe
+      if (browser) {
+        try {
+          const pages = await browser.pages();
+          await Promise.all(pages.map(p => p.close().catch(() => {})));
+          await browser.close();
+        } catch (error) {
+          console.log('Error al cerrar navegador (ignorado):', error.message);
+        }
+      }
+    }
+  }
+}
+
+// Exportar instancia del servicio
+module.exports = new ScraperService();
+
