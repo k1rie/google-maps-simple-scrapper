@@ -21,7 +21,7 @@ class ScraperService {
       console.log('✅ Iniciando navegador con Playwright (headless: true)');
       
       browser = await chromium.launch({
-        headless: true, // Modo headless activado
+        headless: false, // Modo headless activado
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -43,21 +43,36 @@ class ScraperService {
       
       // Navegar a Google Maps
       const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
+      console.log(`Navegando a: ${searchUrl}`);
+      
+      // Usar 'load' en lugar de 'networkidle' porque Google Maps nunca alcanza networkidle
       await page.goto(searchUrl, { 
-        waitUntil: 'networkidle',
-        timeout: 30000 
+        waitUntil: 'load',
+        timeout: 60000 // Aumentar timeout a 60 segundos
       });
 
-      // Esperar a que carguen los resultados
-      await page.waitForSelector('[role="main"]', { timeout: 15000 });
+      console.log('Página cargada, esperando elementos...');
+      
+      // Esperar a que cargue el contenido principal
+      try {
+        await page.waitForSelector('[role="main"]', { timeout: 20000 });
+        console.log('Panel principal encontrado');
+      } catch (e) {
+        console.log('No se encontró [role="main"], continuando...');
+      }
+      
+      // Esperar un poco más para que Google Maps cargue los resultados
+      await page.waitForTimeout(5000);
       
       // Esperar a que aparezcan los resultados de búsqueda
       try {
-        await page.waitForSelector('div[role="article"]', { timeout: 10000 });
+        await page.waitForSelector('div[role="article"]', { timeout: 15000 });
+        console.log('Resultados encontrados');
       } catch (e) {
-        console.log('Esperando resultados...');
+        console.log('Esperando resultados... (continuando de todas formas)');
       }
       
+      // Esperar un poco más para asegurar que los resultados estén completamente renderizados
       await page.waitForTimeout(3000);
       let previousResultsCount = 0;
       let noMoreResults = false;
