@@ -29,6 +29,33 @@ npm start
 
 El servidor se iniciará en `http://localhost:3000`
 
+## 🐳 Docker
+
+### Construir y ejecutar con Docker:
+
+```bash
+# Construir la imagen
+docker build -t scrapper-maps .
+
+# Ejecutar el contenedor
+docker run -d -p 3000:3000 --name scrapper-maps scrapper-maps
+```
+
+### Usar Docker Compose:
+
+```bash
+# Construir y ejecutar
+docker-compose up -d
+
+# Ver logs
+docker-compose logs -f
+
+# Detener
+docker-compose down
+```
+
+El servidor estará disponible en `http://localhost:3000`
+
 ## 📡 Endpoints
 
 ### GET /scrape
@@ -267,4 +294,5 @@ Estos errores son comunes y el scraper los maneja automáticamente. Si se extrae
 - El proceso puede tardar varios segundos dependiendo de la cantidad de resultados
 - El scraper usa el nuevo modo headless de Chrome para mejor rendimiento
 
+# google-maps-simple-scrapper
 # google-maps-simple-scrapper
