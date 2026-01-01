@@ -289,3 +289,4 @@ Estos errores son comunes y el scraper los maneja automáticamente. Si se extrae
 # google-maps-simple-scrapper
 # google-maps-simple-scrapper
 # google-maps-simple-scrapper
+# google-maps-simple-scrapper

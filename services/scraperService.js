@@ -21,7 +21,7 @@ class ScraperService {
       console.log('✅ Iniciando navegador con Playwright (headless: true)');
       
       browser = await chromium.launch({
-        headless: false, // Modo headless activado
+        headless: true, // Modo headless activado
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
