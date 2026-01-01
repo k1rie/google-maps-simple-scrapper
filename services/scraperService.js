@@ -80,6 +80,83 @@ class ScraperService {
       const maxScrollAttempts = 150; // Límite de seguridad
       let stableCount = 0; // Contador para detectar cuando no hay más cambios
 
+      // Función para extraer teléfono del panel expandido
+      const extractPhoneFromExpandedPanel = async () => {
+        try {
+          // Esperar un momento para que el panel se cargue completamente
+          await page.waitForTimeout(1000);
+          
+          const phone = await page.evaluate(() => {
+            let phone = '';
+            
+            // Estrategia 1: Buscar en el botón con aria-label que contiene "Teléfono:"
+            const phoneButton = document.querySelector('button[aria-label*="Teléfono:"], button[data-item-id*="phone"]');
+            if (phoneButton) {
+              const ariaLabel = phoneButton.getAttribute('aria-label') || '';
+              const phoneMatch = ariaLabel.match(/Teléfono:\s*([\d\s\+\-\(\)]+)/i);
+              if (phoneMatch && phoneMatch[1]) {
+                phone = phoneMatch[1].trim();
+              } else {
+                // Buscar en el contenido del botón
+                const phoneText = phoneButton.textContent || phoneButton.innerText || '';
+                const phoneInText = phoneText.match(/([\d\s\+\-\(\)]{8,})/);
+                if (phoneInText) {
+                  phone = phoneInText[1].trim();
+                }
+              }
+              
+              // Si no encontramos, buscar en el div interno que contiene el número
+              if (!phone) {
+                const phoneDiv = phoneButton.querySelector('.Io6YTe, .kR99db, .fdkmkc');
+                if (phoneDiv) {
+                  const phoneText = phoneDiv.textContent || phoneDiv.innerText || '';
+                  const cleanedPhone = phoneText.trim();
+                  if (cleanedPhone && cleanedPhone.match(/\d/)) {
+                    phone = cleanedPhone;
+                  }
+                }
+              }
+            }
+            
+            // Estrategia 2: Buscar en el div específico que contiene el número
+            if (!phone) {
+              const phoneDiv = document.querySelector('div.Io6YTe.fontBodyMedium.kR99db.fdkmkc');
+              if (phoneDiv) {
+                const phoneText = phoneDiv.textContent || phoneDiv.innerText || '';
+                const phoneMatch = phoneText.match(/([\d\s\+\-\(\)]{8,})/);
+                if (phoneMatch) {
+                  const cleaned = phoneMatch[1].replace(/[\s\-\.\(\)]/g, '');
+                  if (cleaned.length >= 8 && cleaned.length <= 15) {
+                    phone = phoneMatch[1].trim();
+                  }
+                }
+              }
+            }
+            
+            // Estrategia 3: Buscar en el data-item-id del botón de teléfono
+            if (!phone) {
+              const phoneDataButton = document.querySelector('button[data-item-id^="phone:tel:"]');
+              if (phoneDataButton) {
+                const dataId = phoneDataButton.getAttribute('data-item-id');
+                if (dataId) {
+                  const telMatch = dataId.match(/tel:(\+?\d+)/);
+                  if (telMatch && telMatch[1]) {
+                    phone = telMatch[1].trim();
+                  }
+                }
+              }
+            }
+            
+            return phone;
+          });
+          
+          return phone || '';
+        } catch (error) {
+          console.log('Error extrayendo teléfono del panel:', error.message);
+          return '';
+        }
+      };
+
       // Función mejorada para extraer información completa de negocios
       const extractBusinesses = async () => {
         const businessesData = await page.evaluate(() => {
@@ -143,8 +220,10 @@ class ScraperService {
                 businessName = 'Sin nombre';
               }
               
-              // Extraer teléfono
+              // Extraer teléfono del card (el teléfono completo generalmente está en el panel expandido)
               let phone = '';
+              
+              // Estrategia 1: Buscar en el texto del card (puede que algunos cards muestren el teléfono)
               const phoneMatches = cardText.match(phoneRegex);
               if (phoneMatches && phoneMatches.length > 0) {
                 // Filtrar números válidos
@@ -158,7 +237,7 @@ class ScraperService {
                 });
               }
               
-              // Buscar en links tel:
+              // Estrategia 2: Buscar en links tel: dentro del card
               if (!phone) {
                 const telLink = card.querySelector('a[href^="tel:"]');
                 if (telLink) {
@@ -168,6 +247,10 @@ class ScraperService {
                   }
                 }
               }
+              
+              // Nota: El teléfono completo generalmente está en el panel expandido,
+              // que se obtiene haciendo clic en el card. Esto se hace en la función
+              // enrichBusinessesWithPhones() después de la extracción inicial.
               
               // Extraer dirección
               let address = '';
@@ -275,9 +358,125 @@ class ScraperService {
         });
       };
 
+      // Función para enriquecer negocios con teléfonos del panel expandido
+      const enrichBusinessesWithPhones = async () => {
+        try {
+          // Obtener todos los cards visibles y sus nombres
+          const cardsInfo = await page.evaluate(() => {
+            const cards = document.querySelectorAll('div[role="article"]');
+            const info = [];
+            
+            cards.forEach((card, index) => {
+              const cardText = card.innerText || card.textContent || '';
+              
+              // Extraer nombre
+              let businessName = '';
+              const nameLink = card.querySelector('a[data-value="name"]') || 
+                             card.querySelector('a[aria-label]');
+              if (nameLink) {
+                businessName = nameLink.getAttribute('aria-label') || 
+                             nameLink.textContent?.trim() || '';
+              }
+              
+              if (!businessName) {
+                const lines = cardText.split('\n').filter(line => line.trim() && line.length > 2);
+                for (let line of lines) {
+                  if (!line.match(/^[\d\s\+\-\(\)]+$/) && line.length > 3) {
+                    businessName = line.trim();
+                    break;
+                  }
+                }
+              }
+              
+              if (businessName && businessName.length > 2) {
+                info.push({ name: businessName.trim(), index });
+              }
+            });
+            
+            return info;
+          });
+
+          console.log(`Procesando ${cardsInfo.length} cards para extraer teléfonos...`);
+
+          // Procesar solo los primeros 20 cards visibles para no ser demasiado lento
+          const maxCardsToProcess = Math.min(cardsInfo.length, 20);
+          
+          for (let i = 0; i < maxCardsToProcess; i++) {
+            try {
+              const cardInfo = cardsInfo[i];
+              if (!cardInfo || !cardInfo.name) continue;
+
+              // Verificar si ya tenemos el teléfono para este negocio
+              const existingBusiness = businesses.get(cardInfo.name);
+              if (existingBusiness && existingBusiness.telefono !== 'No disponible') {
+                continue; // Ya tenemos el teléfono, saltar
+              }
+
+              // Obtener todos los cards y hacer clic en el correcto
+              const cards = await page.$$('div[role="article"]');
+              if (cardInfo.index >= cards.length) continue;
+
+              // Hacer clic en el card para expandirlo
+              try {
+                await cards[cardInfo.index].click({ timeout: 3000 });
+                await page.waitForTimeout(2000); // Esperar a que se cargue el panel
+              } catch (clickError) {
+                // Si no se puede hacer clic, continuar con el siguiente
+                continue;
+              }
+
+              // Extraer el teléfono del panel expandido
+              const phone = await extractPhoneFromExpandedPanel();
+
+              // Actualizar el negocio con el teléfono encontrado
+              if (phone && existingBusiness) {
+                existingBusiness.telefono = phone;
+                console.log(`✓ Teléfono encontrado para ${cardInfo.name}: ${phone}`);
+              } else if (phone && !existingBusiness) {
+                // Si no existe, agregarlo
+                businesses.set(cardInfo.name, {
+                  nombre: cardInfo.name,
+                  telefono: phone,
+                  direccion: 'No disponible',
+                  calificacion: 'No disponible',
+                  reseñas: 'No disponible',
+                  categoria: 'No disponible'
+                });
+                console.log(`✓ Nuevo negocio con teléfono: ${cardInfo.name}: ${phone}`);
+              }
+
+              // Cerrar el panel haciendo clic en el botón de cerrar o presionando Escape
+              try {
+                const closeButton = await page.$('button[aria-label="Cerrar"]');
+                if (closeButton) {
+                  await closeButton.click();
+                  await page.waitForTimeout(500);
+                } else {
+                  // Si no hay botón de cerrar, presionar Escape
+                  await page.keyboard.press('Escape');
+                  await page.waitForTimeout(500);
+                }
+              } catch (e) {
+                // Ignorar errores al cerrar
+              }
+
+            } catch (error) {
+              console.log(`Error procesando card ${i}:`, error.message);
+              continue;
+            }
+          }
+        } catch (error) {
+          console.log('Error en enrichBusinessesWithPhones:', error.message);
+        }
+      };
+
       // Extraer información inicial
       await extractBusinesses();
       console.log(`Negocios encontrados inicialmente: ${businesses.size}`);
+
+      // Enriquecer con teléfonos del panel expandido
+      await enrichBusinessesWithPhones();
+      console.log(`Negocios después de enriquecer con teléfonos: ${businesses.size}`);
 
       // Hacer scroll hasta que no haya más resultados
       while (!noMoreResults && scrollAttempts < maxScrollAttempts) {
